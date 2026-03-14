@@ -1,0 +1,29 @@
+{
+    "name": "rust-durable-functions",
+    "version": "0.1.0",
+    "bin": {
+        "cdk": "bin/index.js"
+    },
+    "scripts": {
+        "build": "tsc",
+        "watch": "tsc -w",
+        "cdk": "cdk",
+        "cdk:deploy:all": "cdk deploy --require-approval=never --all",
+        "cdk:destroy:all": "cdk destroy --require-approval=never --all"
+    },
+    "devDependencies": {
+        "@types/jest": "^30.0.0",
+        "@types/node": "25.3.5",
+        "aws-cdk": "^2.1111.0",
+        "jest": "^30.2.0",
+        "ts-jest": "^29.4.6",
+        "ts-node": "^10.9.2",
+        "typescript": "~5.9.3"
+    },
+    "dependencies": {
+        "@aws-cdk/aws-lambda-go-alpha": "^2.243.0-alpha.0",
+        "aws-cdk-lib": "^2.243.0",
+        "cargo-lambda-cdk": "^0.0.36",
+        "constructs": "^10.5.1"
+    }
+}
