@@ -6,7 +6,7 @@ exclude = ["packages/.claude"]
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
-authors = ["Luis Carlos Osorio Jayk <luiscarlosjayk@gmail.com>"]
+authors = ["Luis Carlos Osorio Jayk"]
 
 [workspace.dependencies]
 lambda_runtime = "1.0.1"

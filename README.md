@@ -4,7 +4,7 @@ Running AWS Lambda Durable Execution with the Rust runtime using a CloudFormatio
 
 ### Author
 
-**[Luis Carlos Osorio Jayk](https://www.linkedin.com/in/luiscarlososoriojayk/)** · [luiscarlosjayk@gmail.com](mailto:luiscarlosjayk@gmail.com)
+**[Luis Carlos Osorio Jayk](https://www.linkedin.com/in/luiscarlososoriojayk/)**
 
 ## Overview
 
