@@ -214,10 +214,6 @@ npx cdk deploy
 - **CloudFormation escape hatch** — The runtime override trick works today, but may break if AWS adds stricter validation that cross-checks the runtime with the deployed artifact.
 - **Rust 2024 edition** — The workspace uses `edition = "2024"`, which is still experimental and requires a nightly or recent stable toolchain.
 
-## Author
-
-**Luis Carlos Osorio Jayk** — [luiscarlosjayk@gmail.com](mailto:luiscarlosjayk@gmail.com) · [LinkedIn](https://www.linkedin.com/in/luiscarlososoriojayk/)
-
 ## License
 
 [MIT](LICENSE)
