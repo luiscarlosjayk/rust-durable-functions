@@ -97,7 +97,8 @@ export function createBedrockFoundationModelPolicyStatementProps(
     return {
         effect: Effect.ALLOW,
         resources: [
-            `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${modelId}`,
+            `arn:aws:bedrock:*::foundation-model/${modelId}`,
+            `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/us.${modelId}`,
         ],
         actions,
     };

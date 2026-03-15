@@ -3,7 +3,7 @@ import * as cdk from "aws-cdk-lib";
 import { loadEnvFile } from "../lib/utils/load-env";
 import { getEnvironment } from "../lib/config/environments";
 import { getNamePrefixed } from "../lib/utils/prefix";
-import { LabStack } from "../lib/stacks/lab";
+import { SimpleLabStack } from "../lib/stacks/simple-lab";
 
 // Load .env file
 loadEnvFile();
@@ -33,7 +33,7 @@ const tags = {
  * Stacks
  */
 const labStackName = getNamePrefixed("rust-durable-functions-lab", environment);
-const _labStack = new LabStack(app, "RustDurableFunctionsLab", {
+const _labStack = new SimpleLabStack(app, "RustDurableFunctionsLab", {
     stackName: labStackName,
     environment,
     env,

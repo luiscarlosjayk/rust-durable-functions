@@ -17,3 +17,11 @@ impl std::fmt::Display for OrderStatus {
         }
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Order {
+    pub order_id: String,
+    pub status: OrderStatus,
+    pub item_name: String,
+    pub quantity: u32,
+}

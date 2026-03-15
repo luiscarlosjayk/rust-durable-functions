@@ -8,7 +8,7 @@ use lambda_runtime::{
     tracing::{self, instrument, subscriber::EnvFilter},
 };
 use serde::{Deserialize, Serialize};
-use shared::OrderStatus;
+use shared::{Order, OrderStatus};
 use std::sync::LazyLock;
 use tokio::sync::OnceCell;
 
@@ -19,14 +19,6 @@ static ORDERS_TABLE: LazyLock<String> =
 #[derive(Debug, Deserialize)]
 struct OrderEvent {
     order_id: String,
-    item_name: String,
-    quantity: u32,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct Order {
-    order_id: String,
-    status: OrderStatus,
     item_name: String,
     quantity: u32,
 }

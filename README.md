@@ -10,6 +10,8 @@ Running AWS Lambda Durable Execution with the Rust runtime using a CloudFormatio
 
 [AWS Lambda Durable Execution](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution.html) enables long-running, stateful workflows that can suspend and resume across invocations. Functions can pause mid-execution waiting for an external callback, then pick up exactly where they left off — with exactly-once step semantics.
 
+The project demonstrates two patterns: a simple order-processing workflow with suspend/resume callbacks, and an AI-agent orchestrator that runs a Bedrock Converse API tool loop on a durable Lambda — suspending and resuming as each tool is executed by a separate Lambda.
+
 **The problem:** AWS officially supports Durable Execution only for Node.js and Python runtimes. CloudFormation rejects `DurableConfig` on custom runtimes.
 
 **This repo's solution:** A CDK L1 escape hatch that tricks CloudFormation into accepting `DurableConfig` on a Rust Lambda, while still executing the Rust binary at runtime.
@@ -47,6 +49,55 @@ sequenceDiagram
     OrderProcessor->>DynamoDB: GetItem (read final state)
     OrderProcessor->>Client: Return completed Order
     deactivate OrderProcessor
+```
+
+### Report Orchestrator Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Orchestrator as report-orchestrator<br/>(Durable Lambda)
+    participant Bedrock as Bedrock Converse API
+    participant Fetcher as orders-fetcher<br/>(Lambda)
+    participant DynamoDB
+    participant Saver as report-saver<br/>(Lambda)
+    participant S3
+    participant SNS
+
+    Client->>Orchestrator: Invoke with report_topic
+    activate Orchestrator
+
+    Note over Orchestrator,Bedrock: Tool loop begins
+    Orchestrator->>Bedrock: Converse (system prompt + user topic)
+    Bedrock-->>Orchestrator: ToolUse: get_orders_statuses
+
+    Note over Orchestrator: Create callback & suspend
+    Orchestrator->>Fetcher: Async invoke (callback_id)
+    Orchestrator-->>Orchestrator: ⏸ Suspend
+    activate Fetcher
+    Fetcher->>DynamoDB: Scan orders
+    Fetcher->>Orchestrator: SendDurableExecutionCallbackSuccess
+    deactivate Fetcher
+
+    Note over Orchestrator: Resume with orders data
+    Orchestrator->>Bedrock: Converse (tool result: orders JSON)
+    Bedrock-->>Orchestrator: ToolUse: save_report (title, content)
+
+    Note over Orchestrator: Create callback & suspend
+    Orchestrator->>Saver: Async invoke (callback_id, title, content)
+    Orchestrator-->>Orchestrator: ⏸ Suspend
+    activate Saver
+    Saver->>S3: PutObject (markdown report)
+    Saver->>Orchestrator: SendDurableExecutionCallbackSuccess
+    deactivate Saver
+
+    Note over Orchestrator: Resume with report URL
+    Orchestrator->>Bedrock: Converse (tool result: report URL)
+    Bedrock-->>Orchestrator: EndTurn
+
+    Orchestrator->>SNS: Publish notification
+    Orchestrator->>Client: Return report_url + notification_sent
+    deactivate Orchestrator
 ```
 
 ## The Hack: How It Works
@@ -97,7 +148,7 @@ rust-durable-functions/
 ├── cdk/                                    # AWS CDK infrastructure (TypeScript)
 │   ├── bin/index.ts                        # CDK app entry point
 │   ├── lib/
-│   │   ├── stacks/lab/index.ts             # Stack: DynamoDB + Lambdas + the hack
+│   │   ├── stacks/simple-lab.ts            # Stack: DynamoDB + S3 + SNS + Lambdas + the hack
 │   │   └── constructs/lambda/
 │   │       └── rust-lambda-function-builder.ts  # Builder for Rust Lambdas with durable support
 │   └── package.json
@@ -105,7 +156,10 @@ rust-durable-functions/
 │   ├── Cargo.toml                          # Workspace config (edition 2024)
 │   ├── order-processor/src/main.rs         # Durable function: order workflow
 │   ├── callback-sender/src/main.rs         # HTTP Lambda: sends durable callbacks
-│   └── shared/src/lib.rs                   # Shared types (OrderStatus enum)
+│   ├── report-orchestrator/src/main.rs     # Durable function: Bedrock agentic tool loop
+│   ├── orders-fetcher/src/main.rs          # Standard Lambda: scans DynamoDB, sends callback
+│   ├── report-saver/src/main.rs            # Standard Lambda: writes report to S3, sends callback
+│   └── shared/src/lib.rs                   # Shared types (Order, OrderStatus)
 └── LICENSE
 ```
 
@@ -150,6 +204,46 @@ let callback = ctx.create_callback_named::<CallbackResult>("order-approval", Non
 // Function suspends here — resumes when callback-sender triggers it
 let callback_result: CallbackResult = callback.result().await?;
 ```
+
+## The Report Orchestrator Example
+
+The `report-orchestrator` Lambda demonstrates an AI-agent tool loop running on a durable Lambda. It uses the **Bedrock Converse API** to let a model (configurable via `BEDROCK_MODEL_ID`) decide which tools to call, while the durable execution runtime handles suspend/resume between each tool invocation.
+
+### How It Works
+
+1. The orchestrator receives a `report_topic` and sends it to Bedrock Converse with a system prompt and two tool definitions
+2. Bedrock responds with `ToolUse` blocks — the orchestrator creates a **named callback**, async-invokes the corresponding worker Lambda, and **suspends**
+3. The worker Lambda executes the tool (DynamoDB scan or S3 write) and calls `SendDurableExecutionCallbackSuccess` to resume the orchestrator
+4. The orchestrator feeds the tool result back to Bedrock and loops until the model returns `EndTurn`
+5. An SNS notification is published with the report URL
+
+### Tools Defined
+
+| Tool | Description | Worker Lambda |
+|---|---|---|
+| `get_orders_statuses` | Fetches all orders from DynamoDB | `orders-fetcher` |
+| `save_report` | Saves a markdown report to S3 | `report-saver` |
+
+### Serializable Converse Output
+
+The Bedrock SDK's `ConverseOutput` type doesn't implement `Serialize`/`Deserialize`, which is required for durable step caching. The orchestrator wraps each Converse call in `ctx.step()` and returns a custom `ConverseStepOutput` struct that extracts just the stop reason and content blocks into serializable form:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConverseStepOutput {
+    stop_reason: String,
+    content_blocks: Vec<SerializableBlock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum SerializableBlock {
+    Text { text: String },
+    ToolUse { tool_use_id: String, name: String, input_json: String },
+}
+```
+
+This lets the durable runtime replay Converse steps without re-calling the API.
 
 ## Prerequisites
 
@@ -197,6 +291,35 @@ npx cdk deploy
 
 3. The `order-processor` **resumes**, reads the updated order, and returns the final result.
 
+4. **Invoke the report-orchestrator**:
+   ```bash
+   aws lambda invoke \
+     --function-name <report-orchestrator-function-name> \
+     --payload '{"report_topic": "Generate a summary report of all current order statuses"}' \
+     --cli-binary-format raw-in-base64-out \
+     response.json
+   ```
+   The orchestrator will call Bedrock, suspend while tools execute, and return a `report_url`.
+
+5. **Check S3 for the generated report**:
+   ```bash
+   aws s3 ls s3://<reports-bucket>/reports/
+   aws s3 cp s3://<reports-bucket>/reports/<report-id>.md -
+   ```
+
+6. **(Optional) Subscribe to the SNS topic** for report notifications:
+   ```bash
+   aws sns subscribe \
+     --topic-arn <notifications-topic-arn> \
+     --protocol email \
+     --notification-endpoint your@email.com
+   ```
+
+7. **Check CloudWatch logs** for the tool loop execution:
+   ```bash
+   aws logs tail /aws/lambda/<report-orchestrator-function-name> --follow
+   ```
+
 ## Key Dependencies
 
 | Dependency | Version | Purpose |
@@ -206,13 +329,19 @@ npx cdk deploy
 | `lambda_http` | 1.1.1 | HTTP event handling for callback-sender |
 | `aws-sdk-dynamodb` | 1.108.0 | DynamoDB operations |
 | `aws-sdk-lambda` | 1 | `SendDurableExecutionCallbackSuccess` API |
+| `aws-sdk-bedrockruntime` | 1 | Bedrock Converse API |
+| `aws-sdk-s3` | 1 | S3 report storage |
+| `aws-sdk-sns` | 1 | SNS notifications |
+| `aws-smithy-types` | 1 | Document type conversion for Bedrock tool schemas |
+| `uuid` | 1 | Report file name generation |
 | `cargo-lambda-cdk` | 0.0.36 | CDK construct for building/deploying Rust Lambdas |
 
 ## Caveats
 
 - **Alpha SDK** — `durable-execution-sdk` is at `0.1.0-alpha2`. The API may change.
-- **CloudFormation escape hatch** — The runtime override trick works today, but may break if AWS adds stricter validation that cross-checks the runtime with the deployed artifact.
+- **CloudFormation escape hatch** — The runtime override trick (see [Modifying the runtime environment](https://docs.aws.amazon.com/lambda/latest/dg/runtimes-modify.html)) works today, but may break if AWS adds stricter validation that cross-checks the runtime with the deployed artifact.
 - **Rust 2024 edition** — The workspace uses `edition = "2024"`, which is still experimental and requires a nightly or recent stable toolchain.
+- **Bedrock permissions** — The `bedrock:InvokeModel` IAM action covers the Converse API. The model ID is configurable via the `BEDROCK_MODEL_ID` environment variable (defaults to `us.anthropic.claude-sonnet-4-6` in the CDK stack).
 
 ## License
 

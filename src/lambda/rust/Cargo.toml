@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["order-processor", "callback-sender", "shared"]
+members = [
+    "order-processor",
+    "callback-sender",
+    "shared",
+    "report-orchestrator",
+    "orders-fetcher",
+    "report-saver",
+]
 exclude = ["packages/.claude"]
 
 [workspace.package]
@@ -24,4 +31,9 @@ durable-execution-sdk = "0.1.0-alpha2"
 aws-sdk-dynamodb = "1.108.0"
 aws-sdk-lambda = "1"
 lambda_http = "1.1.1"
+aws-sdk-bedrockruntime = "1"
+aws-smithy-types = "1"
+aws-sdk-s3 = "1"
+aws-sdk-sns = "1"
+uuid = { version = "1", features = ["v4"] }
 shared = { path = "shared" }

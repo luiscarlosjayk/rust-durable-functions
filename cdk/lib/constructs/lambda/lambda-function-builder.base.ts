@@ -380,7 +380,8 @@ export abstract class LambdaFunctionBuilder<
             return {
                 effect: iam.Effect.ALLOW,
                 resources: [
-                    `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${model.modelId}`,
+                    `arn:aws:bedrock:*::foundation-model/${model.modelId}`,
+                    `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/us.${model.modelId}`,
                 ],
                 actions,
             };
