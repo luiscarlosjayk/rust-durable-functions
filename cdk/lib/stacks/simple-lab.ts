@@ -7,8 +7,10 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sns from "aws-cdk-lib/aws-sns";
 import { Construct } from "constructs";
 import { getNamePrefixed } from "../utils/prefix";
+import { LAMBDA_BASEPATH } from "../utils/constants";
 import { RustLambdaFunctionBuilder } from "../constructs/lambda/rust-lambda-function-builder";
 import { Environment } from "../types/environment";
+import * as nodePath from "node:path";
 
 export interface SimpleLabStackProps extends cdk.StackProps {
     environment: Environment;
@@ -80,12 +82,6 @@ export class SimpleLabStack extends cdk.Stack {
                 retentionPeriod: cdk.Duration.days(3),
             })
             .withDynamoDBTableV2(ordersTable, "ORDERS_TABLE")
-            // https://docs.aws.amazon.com/lambda/latest/dg/durable-security.html
-            .withManagedPolicy(
-                iam.ManagedPolicy.fromAwsManagedPolicyName(
-                    "service-role/AWSLambdaBasicDurableExecutionRolePolicy",
-                ),
-            )
             .build();
 
         // L1 escape hatch: override runtime so CloudFormation accepts DurableConfig
@@ -166,11 +162,6 @@ export class SimpleLabStack extends cdk.Stack {
             .withBedrockFoundationalModels([
                 FoundationModelIdentifier.ANTHROPIC_CLAUDE_SONNET_4_6,
             ])
-            .withManagedPolicy(
-                iam.ManagedPolicy.fromAwsManagedPolicyName(
-                    "service-role/AWSLambdaBasicDurableExecutionRolePolicy",
-                ),
-            )
             .build();
 
         // L1 escape hatch for durable config
@@ -259,6 +250,120 @@ export class SimpleLabStack extends cdk.Stack {
 
         reportSaverLambda.applyRemovalPolicy(removalPolicy);
 
+        // Claude Code Lambda Layer (pre-built at src/lambda/layers/claude-code)
+        const claudeCodeLayer = new lambda.LayerVersion(
+            this,
+            "ClaudeCodeLayer",
+            {
+                code: lambda.Code.fromAsset(
+                    nodePath.join(LAMBDA_BASEPATH, "layers/claude-code"),
+                ),
+                description: "Claude Code CLI for headless usage",
+            },
+        );
+
+        // Claude Code Orchestrator Lambda (Durable)
+        const claudeCodeOrchestratorLambda = new RustLambdaFunctionBuilder(
+            this,
+            "ClaudeCodeOrchestratorLambda",
+            {
+                name: "claude-code-orchestrator",
+                environment,
+            },
+        )
+            .withLogGroup()
+            .withManifest("claude-code-orchestrator")
+            .withMemorySize(1024)
+            .withEnvironmentVariables({
+                RUST_LOG: environment.logLevel,
+                RUST_ENV: environment.envName,
+                AWS_LAMBDA_EXEC_WRAPPER: "/var/task/bootstrap",
+                ANTHROPIC_API_KEY: "TODO-set-via-env-or-secret",
+            })
+            .withApplicationLogLevel(lambda.ApplicationLogLevel.INFO)
+            .withDuration(cdk.Duration.minutes(5))
+            .withDurableConfig({
+                executionTimeout: cdk.Duration.hours(1),
+                retentionPeriod: cdk.Duration.days(3),
+            })
+            .withLayers([claudeCodeLayer])
+            .build();
+
+        // L1 escape hatch for durable config
+        const cfnClaudeCodeFunc = claudeCodeOrchestratorLambda.node
+            .defaultChild as cdk.CfnResource;
+        cfnClaudeCodeFunc.addPropertyOverride("Runtime", "nodejs24.x");
+        cfnClaudeCodeFunc.addPropertyOverride("Handler", "index.handler");
+
+        claudeCodeOrchestratorLambda.applyRemovalPolicy(removalPolicy);
+
+        // Claude Code Bedrock Orchestrator Lambda (Durable) — uses Bedrock via IAM role
+        const claudeCodeBedrockOrchestratorLambda =
+            new RustLambdaFunctionBuilder(
+                this,
+                "ClaudeCodeBedrockOrchestratorLambda",
+                {
+                    name: "claude-code-bedrock-orchestrator",
+                    environment,
+                },
+            )
+                .withLogGroup()
+                .withManifest("claude-code-bedrock-orchestrator")
+                .withMemorySize(1024)
+                .withEnvironmentVariables({
+                    RUST_LOG: environment.logLevel,
+                    RUST_ENV: environment.envName,
+                    AWS_LAMBDA_EXEC_WRAPPER: "/var/task/bootstrap",
+                    CLAUDE_CODE_USE_BEDROCK: "1",
+                    ANTHROPIC_DEFAULT_SONNET_MODEL:
+                        "global.anthropic.claude-sonnet-4-6",
+                    ANTHROPIC_DEFAULT_HAIKU_MODEL:
+                        "global.anthropic.claude-sonnet-4-6",
+                    ANTHROPIC_DEFAULT_OPUS_MODEL:
+                        "global.anthropic.claude-sonnet-4-6",
+                })
+                .withApplicationLogLevel(lambda.ApplicationLogLevel.INFO)
+                .withDuration(cdk.Duration.minutes(5))
+                .withDurableConfig({
+                    executionTimeout: cdk.Duration.hours(1),
+                    retentionPeriod: cdk.Duration.days(3),
+                })
+                .withLayers([claudeCodeLayer])
+                .attachInlinePolicy(
+                    new iam.Policy(
+                        this,
+                        "ClaudeCodeBedrockInferencePolicy",
+                        {
+                            statements: [
+                                new iam.PolicyStatement({
+                                    effect: iam.Effect.ALLOW,
+                                    actions: [
+                                        "bedrock:InvokeModel",
+                                        "bedrock:InvokeModelWithResponseStream",
+                                    ],
+                                    resources: [
+                                        `arn:aws:bedrock:*::foundation-model/${FoundationModelIdentifier.ANTHROPIC_CLAUDE_SONNET_4_6.modelId}`,
+                                        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.${FoundationModelIdentifier.ANTHROPIC_CLAUDE_SONNET_4_6.modelId}`,
+                                    ],
+                                }),
+                            ],
+                        },
+                    ),
+                )
+                .build();
+
+        // L1 escape hatch for durable config
+        const cfnClaudeCodeBedrockFunc =
+            claudeCodeBedrockOrchestratorLambda.node
+                .defaultChild as cdk.CfnResource;
+        cfnClaudeCodeBedrockFunc.addPropertyOverride("Runtime", "nodejs24.x");
+        cfnClaudeCodeBedrockFunc.addPropertyOverride(
+            "Handler",
+            "index.handler",
+        );
+
+        claudeCodeBedrockOrchestratorLambda.applyRemovalPolicy(removalPolicy);
+
         /**
          * Post-build: Add env vars to orchestrator (depends on fetcher/saver being created)
          */
@@ -313,6 +418,22 @@ export class SimpleLabStack extends cdk.Stack {
                 environment,
             ),
             value: notificationsTopic.topicArn,
+        });
+
+        new cdk.CfnOutput(this, "ExportClaudeCodeOrchestratorArn", {
+            exportName: getNamePrefixed(
+                "claude-code-orchestrator-arn",
+                environment,
+            ),
+            value: claudeCodeOrchestratorLambda.functionArn,
+        });
+
+        new cdk.CfnOutput(this, "ExportClaudeCodeBedrockOrchestratorArn", {
+            exportName: getNamePrefixed(
+                "claude-code-bedrock-orchestrator-arn",
+                environment,
+            ),
+            value: claudeCodeBedrockOrchestratorLambda.functionArn,
         });
     }
 }

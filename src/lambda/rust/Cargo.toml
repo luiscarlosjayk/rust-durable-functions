@@ -7,6 +7,8 @@ members = [
     "report-orchestrator",
     "orders-fetcher",
     "report-saver",
+    "claude-code-orchestrator",
+    "claude-code-bedrock-orchestrator",
 ]
 exclude = ["packages/.claude"]
 
@@ -17,7 +19,7 @@ authors = ["Luis Carlos Osorio Jayk"]
 
 [workspace.dependencies]
 lambda_runtime = "1.0.1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "tracing"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "tracing", "process"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "cookies", "form"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }

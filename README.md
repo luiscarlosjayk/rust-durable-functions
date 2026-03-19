@@ -10,7 +10,7 @@ Running AWS Lambda Durable Execution with the Rust runtime using a CloudFormatio
 
 [AWS Lambda Durable Execution](https://docs.aws.amazon.com/lambda/latest/dg/durable-execution.html) enables long-running, stateful workflows that can suspend and resume across invocations. Functions can pause mid-execution waiting for an external callback, then pick up exactly where they left off — with exactly-once step semantics.
 
-The project demonstrates two patterns: a simple order-processing workflow with suspend/resume callbacks, and an AI-agent orchestrator that runs a Bedrock Converse API tool loop on a durable Lambda — suspending and resuming as each tool is executed by a separate Lambda.
+The project demonstrates three patterns: a simple order-processing workflow with suspend/resume callbacks, an AI-agent orchestrator that runs a Bedrock Converse API tool loop on a durable Lambda, and Claude Code CLI running headless on a durable Lambda (with both direct API and Bedrock authentication variants).
 
 **The problem:** AWS officially supports Durable Execution only for Node.js and Python runtimes. CloudFormation rejects `DurableConfig` on custom runtimes.
 
@@ -141,6 +141,39 @@ const ordersProcessorLambda = new RustLambdaFunctionBuilder(this, "OrderProcesso
     .build();
 ```
 
+## Claude Code on Durable Lambda
+
+The `report-orchestrator` example above shows what it takes to integrate Claude manually: you build the Bedrock Converse API tool loop yourself, define tool schemas, parse `ToolUse` blocks, dispatch to worker Lambdas, feed results back, and handle the conversation state across suspend/resume cycles. It works, but it's a lot of plumbing.
+
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) in headless mode (`claude -p`) handles all of that out of the box — tool use, multi-turn conversations, budget limits, and structured JSON output. By running the CLI as a subprocess inside a durable Lambda, you get an AI agent with all of Claude Code's capabilities (file editing, shell commands, web search, MCP servers) and the durability guarantees of exactly-once execution.
+
+This project includes two variants that differ only in how they authenticate:
+
+### Direct API (`claude-code-orchestrator`)
+
+Uses an `ANTHROPIC_API_KEY` environment variable. Simple to set up — just provide your API key and pick a model with the `--model` flag. Billing goes through Anthropic directly.
+
+### Amazon Bedrock (`claude-code-bedrock-orchestrator`)
+
+Authenticates via the Lambda's IAM execution role — no API key needed, billing goes through your AWS account. This is the recommended approach for production since there are no secrets to manage and access is controlled through IAM policies.
+
+The CLI supports Bedrock natively via `CLAUDE_CODE_USE_BEDROCK=1`. The main gotcha is that **you must override all three model tier env vars** (`ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`) — the CLI internally picks models by tier, and if you only configure one, it will try to call a model you haven't granted IAM permissions for.
+
+This variant uses [global Bedrock endpoints](https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock#global-vs-regional-endpoints) (`global.anthropic.claude-sonnet-4-6`) which have no pricing premium over regional endpoints (`us.`/`eu.` prefixes carry a 10% surcharge).
+
+### Why Claude Code over manual Bedrock integration?
+
+| | Manual Bedrock (report-orchestrator) | Claude Code (bedrock-orchestrator) |
+|---|---|---|
+| Tool definitions | Hand-written JSON schemas | Built-in (file I/O, shell, web, MCP) |
+| Conversation loop | You build it | Handled by the CLI |
+| Multi-turn state | Manual message array management | Automatic |
+| Suspend/resume | One callback per tool call | Single `ctx.step()` wrapping the whole CLI |
+| Output format | Custom structs | `--output-format json` with usage/cost |
+| Budget control | Manual token counting | `--max-turns` and `--max-budget-usd` |
+
+The manual approach gives you fine-grained control over each tool call and the ability to suspend between them. Claude Code is better when you want a general-purpose agent that can do more with less code.
+
 ## Project Structure
 
 ```
@@ -159,7 +192,10 @@ rust-durable-functions/
 │   ├── report-orchestrator/src/main.rs     # Durable function: Bedrock agentic tool loop
 │   ├── orders-fetcher/src/main.rs          # Standard Lambda: scans DynamoDB, sends callback
 │   ├── report-saver/src/main.rs            # Standard Lambda: writes report to S3, sends callback
+│   ├── claude-code-orchestrator/src/main.rs           # Durable: Claude Code CLI via API key
+│   ├── claude-code-bedrock-orchestrator/src/main.rs   # Durable: Claude Code CLI via Bedrock
 │   └── shared/src/lib.rs                   # Shared types (Order, OrderStatus)
+├── src/lambda/layers/claude-code/          # Lambda Layer: pre-built Claude Code CLI
 └── LICENSE
 ```
 

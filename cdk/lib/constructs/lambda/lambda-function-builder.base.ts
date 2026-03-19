@@ -180,7 +180,7 @@ export abstract class LambdaFunctionBuilder<
 
         return this;
     }
-    
+
     withDynamoDBTableV2(
         table: dynamoDb.TableV2,
         environmentVariable?: string,
@@ -280,6 +280,13 @@ export abstract class LambdaFunctionBuilder<
 
     withDurableConfig(config: lambda.DurableConfig): this {
         this._durableConfig = config;
+
+        this.withManagedPolicy(
+            iam.ManagedPolicy.fromAwsManagedPolicyName(
+                "service-role/AWSLambdaBasicDurableExecutionRolePolicy",
+            ),
+        );
+
         return this;
     }
 

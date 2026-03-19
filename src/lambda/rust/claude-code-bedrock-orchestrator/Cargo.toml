@@ -1,0 +1,13 @@
+[package]
+name = "claude-code-bedrock-orchestrator"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+lambda_runtime.workspace = true
+tokio.workspace = true
+durable-execution-sdk.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
