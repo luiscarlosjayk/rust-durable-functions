@@ -8,6 +8,8 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import { Construct } from "constructs";
 import { getNamePrefixed } from "../utils/prefix";
 import { LAMBDA_BASEPATH } from "../utils/constants";
+import { NodejsLambdaFunctionBuilder } from "../constructs/lambda/nodejs-lambda-function-builder";
+import * as nodejsLambda from "aws-cdk-lib/aws-lambda-nodejs";
 import { RustLambdaFunctionBuilder } from "../constructs/lambda/rust-lambda-function-builder";
 import { Environment } from "../types/environment";
 import * as nodePath from "node:path";
@@ -364,6 +366,88 @@ export class SimpleLabStack extends cdk.Stack {
 
         claudeCodeBedrockOrchestratorLambda.applyRemovalPolicy(removalPolicy);
 
+        // Claude Agent SDK Bedrock Orchestrator Lambda (Durable, Node.js)
+        // Uses @anthropic-ai/claude-agent-sdk as a package dependency instead of CLI layer
+        const claudeAgentSdkBedrockOrchestratorLambda =
+            new NodejsLambdaFunctionBuilder(
+                this,
+                "ClaudeAgentSdkBedrockOrchestratorLambda",
+                {
+                    name: "nodejs-cc-bedrock-orchestrator",
+                    environment,
+                },
+            )
+                .withLogGroup()
+                .withMemorySize(1024)
+                .withEnvironmentVariables({
+                    CLAUDE_CODE_USE_BEDROCK: "1",
+                    ANTHROPIC_DEFAULT_SONNET_MODEL:
+                        "us.anthropic.claude-sonnet-4-6",
+                    ANTHROPIC_DEFAULT_HAIKU_MODEL:
+                        "us.anthropic.claude-sonnet-4-6",
+                    ANTHROPIC_DEFAULT_OPUS_MODEL:
+                        "us.anthropic.claude-sonnet-4-6",
+                })
+                .withApplicationLogLevel(lambda.ApplicationLogLevel.INFO)
+                .withDuration(cdk.Duration.minutes(5))
+                .withDurableConfig({
+                    executionTimeout: cdk.Duration.hours(1),
+                    retentionPeriod: cdk.Duration.days(3),
+                })
+                .withBundling({
+                    format: nodejsLambda.OutputFormat.ESM,
+                    banner:
+                        'import { createRequire } from "module"; const require = createRequire(import.meta.url);',
+                    externalModules: [
+                        "@aws/durable-execution-sdk-js",
+                        "@anthropic-ai/claude-agent-sdk",
+                    ],
+                    commandHooks: {
+                        beforeBundling: () => [],
+                        beforeInstall: () => [],
+                        afterBundling: (_inputDir: string, outputDir: string) => {
+                            const lambdaDir = nodePath.join(
+                                LAMBDA_BASEPATH,
+                                "nodejs",
+                                "nodejs-cc-bedrock-orchestrator",
+                            );
+                            return [
+                                `cp ${lambdaDir}/package.json ${outputDir}/package.json`,
+                                `cp ${lambdaDir}/package-lock.json ${outputDir}/package-lock.json`,
+                                `cd ${outputDir} && npm ci --omit=dev`,
+                            ];
+                        },
+                    },
+                    forceDockerBundling: false,
+                })
+                .attachInlinePolicy(
+                    new iam.Policy(
+                        this,
+                        "ClaudeAgentSdkBedrockInferencePolicy",
+                        {
+                            statements: [
+                                new iam.PolicyStatement({
+                                    effect: iam.Effect.ALLOW,
+                                    actions: [
+                                        "bedrock:InvokeModel",
+                                        "bedrock:InvokeModelWithResponseStream",
+                                    ],
+                                    resources: [
+                                        `arn:aws:bedrock:*::foundation-model/${FoundationModelIdentifier.ANTHROPIC_CLAUDE_SONNET_4_6.modelId}`,
+                                        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/us.${FoundationModelIdentifier.ANTHROPIC_CLAUDE_SONNET_4_6.modelId}`,
+                                        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.${FoundationModelIdentifier.ANTHROPIC_CLAUDE_SONNET_4_6.modelId}`,
+                                    ],
+                                }),
+                            ],
+                        },
+                    ),
+                )
+                .build();
+
+        claudeAgentSdkBedrockOrchestratorLambda.applyRemovalPolicy(
+            removalPolicy,
+        );
+
         /**
          * Post-build: Add env vars to orchestrator (depends on fetcher/saver being created)
          */
@@ -435,5 +519,17 @@ export class SimpleLabStack extends cdk.Stack {
             ),
             value: claudeCodeBedrockOrchestratorLambda.functionArn,
         });
+
+        new cdk.CfnOutput(
+            this,
+            "ExportClaudeAgentSdkBedrockOrchestratorArn",
+            {
+                exportName: getNamePrefixed(
+                    "nodejs-cc-bedrock-orchestrator-arn",
+                    environment,
+                ),
+                value: claudeAgentSdkBedrockOrchestratorLambda.functionArn,
+            },
+        );
     }
 }

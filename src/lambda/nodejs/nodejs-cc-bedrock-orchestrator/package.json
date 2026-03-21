@@ -1,0 +1,11 @@
+{
+    "name": "claude-agent-sdk-bedrock-orchestrator",
+    "version": "1.0.0",
+    "private": true,
+    "dependencies": {
+        "@anthropic-ai/claude-agent-sdk": "latest"
+    },
+    "devDependencies": {
+        "@aws/durable-execution-sdk-js": "latest"
+    }
+}
