@@ -23,7 +23,7 @@
     },
     "dependencies": {
         "@aws-cdk/aws-lambda-go-alpha": "^2.244.0-alpha.0",
-        "aws-cdk-lib": "^2.244.0",
+        "aws-cdk-lib": "^2.250.0",
         "cargo-lambda-cdk": "^0.0.36",
         "constructs": "^10.5.1"
     }
